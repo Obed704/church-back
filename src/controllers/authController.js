@@ -1,44 +1,69 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import User from "../models/User.js";
-import { key } from "../../hidden.js";
 
 const router = express.Router();
 
-// REGISTER
+// ✅ Load .env (ESM-safe)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+
+// ✅ Ensure secret exists
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET is missing in .env");
+  process.exit(1);
+}
+
+/* ---------------- REGISTER ---------------- */
+// Users should NOT choose role during register
 router.post("/register", async (req, res) => {
   try {
-    const { fullName, email, password, role } = req.body; // include role
+    const { fullName, email, password } = req.body;
+
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ message: "fullName, email, password are required" });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ message: "User already exists" });
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = new User({
       fullName,
       email,
       password: hashedPassword,
-      role: role || "user", // default to user if role not sent
+      role: "user", // ✅ always default
     });
 
     await user.save();
     res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Error registering user", error: err });
+    res.status(500).json({ message: "Error registering user", error: err.message });
   }
 });
 
-// LOGIN
+/* ---------------- LOGIN ---------------- */
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email }).lean(); // plain JS object
-    if (!user) return res.status(400).json({ msg: "User not found" });
+
+    const user = await User.findOne({ email }); // need password to compare
+    if (!user) return res.status(400).json({ message: "User not found" });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ msg: "Invalid credentials" });
+    if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id }, key, { expiresIn: "1h" });
+    // ✅ SIGN with the SAME secret that verifyToken uses
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "1d",
+    });
 
-    // return all important fields including role
     res.json({
       token,
       user: {

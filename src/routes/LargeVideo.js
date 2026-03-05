@@ -1,20 +1,9 @@
 import express from "express";
+import Favorite from "../models/LargeVideoFavorite.js";
 import Video from "../models/LargeVideo.js";
 import { verifyToken } from "../middleware/auth.js";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
 
 const router = express.Router();
-
-// Environment variables
-const BASE_URL = process.env.BASE_URL;
-const UPLOAD_DIR = process.env.LARGE_VIDEO_UPLOAD_DIR || "public/largeVideo";
-
-// Ensure upload directory exists
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
 
 // Helper: Extract YouTube ID from various URL formats
 const extractYouTubeId = (url) => {
@@ -26,97 +15,99 @@ const extractYouTubeId = (url) => {
   ];
 
   for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match && match[1]) {
-      return match[1].substring(0, 11);
-    }
+    const match = url?.match(pattern);
+    if (match && match[1]) return match[1].substring(0, 11);
   }
   return null;
 };
 
-// Helper: Get YouTube embed URL
-const getYouTubeEmbedUrl = (videoId) => {
-  return `https://www.youtube.com/embed/${videoId}?autoplay=1&controls=1&modestbranding=1&rel=0`;
+const getYouTubeEmbedUrl = (videoId) =>
+  `https://www.youtube.com/embed/${videoId}?autoplay=1&controls=1&modestbranding=1&rel=0`;
+
+const getYouTubeThumbnail = (videoId) =>
+  `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
+// Always return a frontend-friendly object
+const formatVideoResponse = (doc) => {
+  const v = { ...doc._doc };
+
+  // Force youtube-only formatting
+  v.type = "youtube";
+  v.src = getYouTubeEmbedUrl(v.youtubeId);
+  v.thumbnail = getYouTubeThumbnail(v.youtubeId);
+
+  // Keep these for UI
+  v.isYouTube = true;
+
+  return v;
 };
 
-// Helper: Get YouTube thumbnail
-const getYouTubeThumbnail = (videoId) => {
-  return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-};
-
-// Helper: Format video response with correct src and metadata
-const formatVideoResponse = (videoDoc) => {
-  const video = { ...videoDoc._doc };
-
-  if (video.type === "uploaded") {
-    const filename = path.basename(video.src);
-    video.src = `${BASE_URL}/largeVideo/${filename}`;
-    video.isYouTube = false;
-    delete video.youtubeId;
-  } else if (video.type === "youtube") {
-    video.src = getYouTubeEmbedUrl(video.youtubeId);
-    video.thumbnail = getYouTubeThumbnail(video.youtubeId);
-    video.isYouTube = true;
-  }
-
-  return video;
-};
-
-// Multer configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: parseInt(process.env.MAX_VIDEO_SIZE_MB || "500") * 1024 * 1024 }, // Default 500MB
-  fileFilter: (req, file, cb) => {
-    const allowed = /mp4|mov|avi|mkv|webm/;
-    const extValid = allowed.test(path.extname(file.originalname).toLowerCase());
-    const mimeValid = allowed.test(file.mimetype);
-    if (extValid && mimeValid) cb(null, true);
-    else cb(new Error("Only video files (mp4, mov, avi, mkv, webm) are allowed!"));
-  },
-});
-
-// GET all videos
+// GET all (youtube-only)
 router.get("/", async (req, res) => {
   try {
-    const videos = await Video.find().sort({ createdAt: -1 });
-    const formattedVideos = videos.map(formatVideoResponse);
-    res.json(formattedVideos);
+    const videos = await Video.find({ type: "youtube" }).sort({ createdAt: -1 });
+    res.json(videos.map(formatVideoResponse));
   } catch (err) {
     console.error("Error fetching videos:", err);
     res.status(500).json({ message: "Error fetching videos" });
   }
 });
 
-// POST upload local video
-router.post("/", verifyToken, upload.single("video"), async (req, res) => {
+// GET my favorites (protected)
+router.get("/favorites/me", verifyToken, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: "No video file uploaded" });
+    const userId = req.user.id || req.user._id; // adjust if your verifyToken uses _id
+    const favs = await Favorite.find({ userId }).select("videoId");
 
-    const newVideo = new Video({
-      type: "uploaded",
-      title: req.body.title?.trim() || "Untitled Video",
-      description: req.body.description?.trim() || "",
-      uploader: req.user.fullName,
-      src: `/largeVideo/${req.file.filename}`, // Relative path stored in DB
-    });
+    const ids = favs.map((f) => f.videoId);
+    const videos = await Video.find({ _id: { $in: ids }, type: "youtube" }).sort({ createdAt: -1 });
 
-    const saved = await newVideo.save();
-    res.json(formatVideoResponse(saved));
+    res.json(videos.map(formatVideoResponse));
   } catch (err) {
-    console.error("Upload error:", err);
-    res.status(500).json({ message: "Upload failed", error: err.message });
+    console.error("Favorites fetch error:", err);
+    res.status(500).json({ message: "Failed to fetch favorites" });
   }
 });
 
-// POST add YouTube video
+// GET favorite ids (fast) (protected)
+router.get("/favorites/ids", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const favs = await Favorite.find({ userId }).select("videoId");
+    res.json({ ids: favs.map((f) => String(f.videoId)) });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch favorite ids" });
+  }
+});
+
+// POST toggle favorite (protected)
+router.post("/:id/favorite/toggle", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const videoId = req.params.id;
+
+    // ensure video exists
+    const video = await Video.findById(videoId);
+    if (!video) return res.status(404).json({ message: "Video not found" });
+
+    const existing = await Favorite.findOne({ userId, videoId });
+
+    if (existing) {
+      await Favorite.deleteOne({ _id: existing._id });
+      return res.json({ favorited: false });
+    }
+
+    await Favorite.create({ userId, videoId });
+    return res.json({ favorited: true });
+  } catch (err) {
+    // duplicate key means already favorited (race condition)
+    if (err?.code === 11000) return res.json({ favorited: true });
+    console.error("Toggle favorite error:", err);
+    res.status(500).json({ message: "Failed to toggle favorite" });
+  }
+});
+
+// POST add YouTube video (protected)
 router.post("/youtube", verifyToken, async (req, res) => {
   try {
     const { url, title = "", description = "", channel = "Unknown Channel" } = req.body;
@@ -147,15 +138,17 @@ router.post("/youtube", verifyToken, async (req, res) => {
   }
 });
 
-// PUT edit video
+// PUT edit (protected)
 router.put("/:id", verifyToken, async (req, res) => {
   try {
-    const { title, description } = req.body;
+    const { title, description, youtubeChannel } = req.body;
+
     const video = await Video.findById(req.params.id);
     if (!video) return res.status(404).json({ message: "Video not found" });
 
     if (title !== undefined) video.title = title.trim();
     if (description !== undefined) video.description = description.trim();
+    if (youtubeChannel !== undefined) video.youtubeChannel = youtubeChannel.trim();
 
     const updated = await video.save();
     res.json(formatVideoResponse(updated));
@@ -164,19 +157,11 @@ router.put("/:id", verifyToken, async (req, res) => {
   }
 });
 
-// DELETE video
+// DELETE (protected)
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const video = await Video.findById(req.params.id);
     if (!video) return res.status(404).json({ message: "Video not found" });
-
-    if (video.type === "uploaded" && video.src) {
-      const filename = path.basename(video.src);
-      const filePath = path.join(UPLOAD_DIR, filename);
-      fs.unlink(filePath, (err) => {
-        if (err) console.error("Failed to delete file:", filePath, err);
-      });
-    }
 
     await video.deleteOne();
     res.json({ message: "Video deleted successfully" });
@@ -185,21 +170,35 @@ router.delete("/:id", verifyToken, async (req, res) => {
   }
 });
 
-// POST like
-router.post("/:id/like", async (req, res) => {
+// POST like (optionally you can protect it; keeping it open like your old code)
+router.post("/:id/like", verifyToken, async (req, res) => {
   try {
+    const userId = req.user.id || req.user._id; // whatever your middleware sets
+
     const video = await Video.findById(req.params.id);
     if (!video) return res.status(404).json({ message: "Video not found" });
 
-    video.likes += 1;
+    const alreadyLiked = (video.likedBy || []).some(
+      (id) => String(id) === String(userId)
+    );
+
+    if (alreadyLiked) {
+      return res.status(400).json({ message: "You already liked this video" });
+    }
+
+    video.likedBy = video.likedBy || [];
+    video.likedBy.push(userId);
+    video.likes = (video.likes || 0) + 1;
+
     const updated = await video.save();
     res.json(formatVideoResponse(updated));
   } catch (err) {
+    console.error("Like failed:", err);
     res.status(500).json({ message: "Like failed" });
   }
 });
 
-// POST comment
+// POST comment (protected)
 router.post("/:id/comment", verifyToken, async (req, res) => {
   try {
     const { text } = req.body;
@@ -211,6 +210,7 @@ router.post("/:id/comment", verifyToken, async (req, res) => {
     video.comments.push({
       user: req.user.fullName,
       text: text.trim(),
+      replies: [],
     });
 
     const updated = await video.save();

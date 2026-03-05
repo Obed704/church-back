@@ -3,6 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import http from "http";
+import cookieParser from "cookie-parser";
 
 import connectDB from "./src/config/mongoConnect.js";
 
@@ -24,7 +26,15 @@ import LargeVideo from "./src/routes/LargeVideo.js";
 import holidayRoutes from "./src/routes/HolidayRoutes.js";
 import PreachRoutes from "./src/routes/dailyPreachingRoutes.js";
 import commingeventsRoutes from "./src/routes/eventEvent.js";
+import AdminVideo from "./src/routes/adminVideos.js";
+import committeeRoutes from "./src/routes/committeeRoutes.js";
 
+
+
+// NEW: chat
+import usersRoutes from "./src/routes/users.js";
+import chatRoutes from "./src/routes/chat.js";
+import { initSocket } from "./src/socket.js";
 
 import passport from "passport";
 import session from "express-session";
@@ -38,13 +48,16 @@ dotenv.config();
 
 const app = express();
 
-// Connect to database
+// Connect DB
 connectDB();
 
 // Middleware
 app.use(express.json());
 
-// CORS configuration - moved origin to .env
+// ✅ cookie parser (helps your verifyToken if you ever use cookie auth)
+app.use(cookieParser());
+
+// CORS
 app.use(
   cors({
     origin: process.env.CLIENT_URL,
@@ -52,17 +65,17 @@ app.use(
   })
 );
 
-// Session configuration
+// Session
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || process.env.JWT_SECRET, // Prefer SESSION_SECRET if set
+    secret: process.env.SESSION_SECRET || process.env.JWT_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === "production", // HTTPS only in production
+      secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 24 * 60 * 60 * 1000,
     },
   })
 );
@@ -74,11 +87,12 @@ app.use("/uploads/videos", express.static(path.join(__dirname, "public", "upload
 app.use("/videos", express.static(path.join(__dirname, "public/videos")));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Passport middleware
+// Passport
 app.use(passport.initialize());
 app.use(passport.session());
 
 // API Routes
+app.use("/api/committees", committeeRoutes);
 app.use("/api/choirs", choirRoutes);
 app.use("/api/sundayService", sundayServiceRoutes);
 app.use("/api/departments", departmentRoutes);
@@ -92,14 +106,29 @@ app.use("/api/baptism", baptismRoutes);
 app.use("/api/donations", donationRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/videos", videoRoutes);
+app.use("/api/admin/videos", AdminVideo);
 app.use("/api/LargeVideo", LargeVideo);
 app.use("/api/holiday", holidayRoutes);
 app.use("/api/dailyPreachingsWord", PreachRoutes);
 app.use("/api/commingevents", commingeventsRoutes);
 
+// ✅ NEW: Users directory + Chat APIs
+app.use("/api/users", usersRoutes);
+app.use("/api/chat", chatRoutes);
+
+// Health check
+app.get("/", (req, res) => res.send("✅ API running"));
+
+// ✅ Create HTTP server + attach socket
+const server = http.createServer(app);
+const socketApi = initSocket(server);
+
+// ✅ Make socket available in routes via req.app.locals.socketApi
+app.locals.socketApi = socketApi;
+
 // Start server
-const PORT = 5000;
-app.listen(PORT, () => {
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
 
