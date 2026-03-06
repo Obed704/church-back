@@ -24,29 +24,6 @@ if (!process.env.JWT_SECRET) {
 }
 
 // REGISTER
-router.post("/register", async (req, res) => {
-  try {
-    const { fullName, email, password, role } = req.body;
-    const existingUser = await User.findOne({ email });
-    if (existingUser)
-      return res.status(400).json({ msg: "User already exists" });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = new User({
-      fullName,
-      email,
-      password: hashedPassword,
-      role: role || "user",
-    });
-
-    await user.save();
-    res.json({ msg: "✅ User registered successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // LOGIN
 router.post("/login", async (req, res) => {
   try {
@@ -66,11 +43,41 @@ router.post("/login", async (req, res) => {
       token,
       user: {
         id: user._id,
+        _id: user._id,
         fullName: user.fullName,
         email: user.email,
         role: user.role,
+
+        // ✅ add this
+        avatarUrl: user.avatarUrl || "",
       },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// REGISTER
+router.post("/register", async (req, res) => {
+  try {
+    const { fullName, email, password, avatarUrl } = req.body;
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser)
+      return res.status(400).json({ msg: "User already exists" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = new User({
+      fullName,
+      email,
+      password: hashedPassword,
+      role: "user", // ✅ security: force user
+      avatarUrl: (avatarUrl || "").trim(), // ✅ save avatar
+    });
+
+    await user.save();
+    res.json({ msg: "✅ User registered successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

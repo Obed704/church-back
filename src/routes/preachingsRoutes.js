@@ -1,116 +1,201 @@
 import express from "express";
-import Study from "../models/Study.js";
+import mongoose from "mongoose";
+import DailyPreaching from "../models/dailyPreachings.js";
 
 const router = express.Router();
 
-// GET all studies
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+/* -------------------- CRUD -------------------- */
+
+// CREATE (this is what your frontend POST needs)
+router.post("/", async (req, res) => {
+  try {
+    const { day, date, preacher, verses, description } = req.body;
+
+    // basic validation (keep light)
+    if (!day || !date || !preacher || !description) {
+      return res.status(400).json({
+        message: "Missing required fields: day, date, preacher, description",
+      });
+    }
+
+    const created = await DailyPreaching.create({
+      day: String(day).trim(),
+      date: new Date(date),
+      preacher: String(preacher).trim(),
+      verses: Array.isArray(verses)
+        ? verses.map((v) => String(v).trim()).filter(Boolean)
+        : [],
+      description: String(description).trim(),
+    });
+
+    return res.status(201).json(created);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// READ ALL
 router.get("/", async (req, res) => {
   try {
-    const studies = await Study.find().sort({ createdAt: -1 });
-    res.json(studies);
+    const items = await DailyPreaching.find().sort({ date: -1, createdAt: -1 });
+    return res.json(items);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// GET single study
+// READ ONE
 router.get("/:id", async (req, res) => {
   try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ message: "Study not found" });
-    res.json(study);
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const item = await DailyPreaching.findById(req.params.id);
+    if (!item) return res.status(404).json({ message: "Preaching not found" });
+
+    return res.json(item);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// UPDATE study
+// UPDATE
 router.put("/:id", async (req, res) => {
   try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ message: "Study not found" });
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
 
-    Object.assign(study, req.body); // update all fields from body
-    await study.save();
-    res.json(study);
+    const item = await DailyPreaching.findById(req.params.id);
+    if (!item) return res.status(404).json({ message: "Preaching not found" });
+
+    const { day, date, preacher, verses, description } = req.body;
+
+    // update only provided fields
+    if (day !== undefined) item.day = String(day).trim();
+    if (date !== undefined) item.date = new Date(date);
+    if (preacher !== undefined) item.preacher = String(preacher).trim();
+    if (description !== undefined) item.description = String(description).trim();
+
+    if (verses !== undefined) {
+      item.verses = Array.isArray(verses)
+        ? verses.map((v) => String(v).trim()).filter(Boolean)
+        : [];
+    }
+
+    await item.save();
+    return res.json(item);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE study
+// DELETE
 router.delete("/:id", async (req, res) => {
   try {
-    const study = await Study.findByIdAndDelete(req.params.id);
-    if (!study) return res.status(404).json({ message: "Study not found" });
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
 
-    res.json({ message: "Study deleted successfully" });
+    const deleted = await DailyPreaching.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Preaching not found" });
+
+    return res.json({ message: "Preaching deleted successfully" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-/* LIKE / UNLIKE */
+/* -------------------- OPTIONAL: like/favorite/comment/reply -------------------- */
+
+// LIKE / UNLIKE
 router.post("/:id/like", async (req, res) => {
-  const { user } = req.body;
+  try {
+    const { user } = req.body;
+    if (!user) return res.status(400).json({ message: "Missing user" });
 
-  const preaching = await DailyPreaching.findById(req.params.id);
-  if (!preaching) return res.status(404).json({ message: "Not found" });
+    const preaching = await DailyPreaching.findById(req.params.id);
+    if (!preaching) return res.status(404).json({ message: "Not found" });
 
-  if (preaching.likes.includes(user)) {
-    preaching.likes.pull(user);
-  } else {
-    preaching.likes.push(user);
+    preaching.likes = preaching.likes || [];
+
+    if (preaching.likes.includes(user)) preaching.likes.pull(user);
+    else preaching.likes.push(user);
+
+    await preaching.save();
+    return res.json(preaching.likes);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-
-  await preaching.save();
-  res.json(preaching.likes);
 });
 
-/* FAVORITE / UNFAVORITE */
+// FAVORITE / UNFAVORITE
 router.post("/:id/favorite", async (req, res) => {
-  const { user } = req.body;
+  try {
+    const { user } = req.body;
+    if (!user) return res.status(400).json({ message: "Missing user" });
 
-  const preaching = await DailyPreaching.findById(req.params.id);
-  if (!preaching) return res.status(404).json({ message: "Not found" });
+    const preaching = await DailyPreaching.findById(req.params.id);
+    if (!preaching) return res.status(404).json({ message: "Not found" });
 
-  if (preaching.favorites.includes(user)) {
-    preaching.favorites.pull(user);
-  } else {
-    preaching.favorites.push(user);
+    preaching.favorites = preaching.favorites || [];
+
+    if (preaching.favorites.includes(user)) preaching.favorites.pull(user);
+    else preaching.favorites.push(user);
+
+    await preaching.save();
+    return res.json(preaching.favorites);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-
-  await preaching.save();
-  res.json(preaching.favorites);
 });
 
-/* ADD COMMENT */
+// ADD COMMENT
 router.post("/:id/comment", async (req, res) => {
-  const { user, text } = req.body;
+  try {
+    const { user, text } = req.body;
+    if (!user || !text) {
+      return res.status(400).json({ message: "Missing user or text" });
+    }
 
-  const preaching = await DailyPreaching.findById(req.params.id);
-  if (!preaching) return res.status(404).json({ message: "Not found" });
+    const preaching = await DailyPreaching.findById(req.params.id);
+    if (!preaching) return res.status(404).json({ message: "Not found" });
 
-  preaching.comments.push({ user, text });
-  await preaching.save();
+    preaching.comments = preaching.comments || [];
+    preaching.comments.push({ user: String(user).trim(), text: String(text).trim() });
 
-  res.json(preaching.comments);
+    await preaching.save();
+    return res.json(preaching.comments);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
-/* REPLY TO COMMENT */
+// REPLY TO COMMENT
 router.post("/:id/comment/:commentId/reply", async (req, res) => {
-  const { user, text } = req.body;
+  try {
+    const { user, text } = req.body;
+    if (!user || !text) {
+      return res.status(400).json({ message: "Missing user or text" });
+    }
 
-  const preaching = await DailyPreaching.findById(req.params.id);
-  if (!preaching) return res.status(404).json({ message: "Not found" });
+    const preaching = await DailyPreaching.findById(req.params.id);
+    if (!preaching) return res.status(404).json({ message: "Not found" });
 
-  const comment = preaching.comments.id(req.params.commentId);
-  if (!comment) return res.status(404).json({ message: "Comment not found" });
+    const comment = preaching.comments?.id(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
 
-  comment.replies.push({ user, text });
-  await preaching.save();
+    comment.replies = comment.replies || [];
+    comment.replies.push({ user: String(user).trim(), text: String(text).trim() });
 
-  res.json(comment.replies);
+    await preaching.save();
+    return res.json(comment.replies);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
