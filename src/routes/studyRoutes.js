@@ -1,20 +1,7 @@
 import express from "express";
 import Study from "../models/Study.js";
-import { upload } from "../middleware/UploadStudy.js";
 
 const router = express.Router();
-
-// Upload study image
-router.post("/upload-image", upload.single("image"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No image uploaded" });
-  }
-
-  res.json({
-    imageUrl: `/uploads/studies/${req.file.filename}`
-  });
-});
-
 
 // Get all studies with filtering, pagination, and sorting
 router.get("/", async (req, res) => {
@@ -34,110 +21,80 @@ router.get("/", async (req, res) => {
 
     let query = { status: "published" };
 
-    // Category filter
     if (category && category !== "all") {
       query.category = category;
     }
 
-    // Difficulty filter
     if (difficulty && difficulty !== "all") {
       query.difficulty = difficulty;
     }
 
-    // Featured filter
     if (featured === "true") {
       query.isFeatured = true;
     }
 
-    // Tags filter
     if (tags) {
       query.tags = { $in: tags.split(",") };
     }
 
-    // Time filter
-    if (timeFilter === "new") {
+    if (timeFilter === "week") {
       const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       query.createdAt = { $gte: oneWeekAgo };
-    } else if (timeFilter === "popular") {
+    } else if (timeFilter === "month") {
       const oneMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       query.createdAt = { $gte: oneMonthAgo };
+    } else if (timeFilter === "year") {
+      const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+      query.createdAt = { $gte: oneYearAgo };
     }
 
-    // Search filter
     if (search) {
       const searchRegex = new RegExp(search, "i");
       query.$or = [
         { title: searchRegex },
         { description: searchRegex },
+        { summary: searchRegex },
         { tags: searchRegex },
         { callToAction: searchRegex },
         { "verses.reference": searchRegex },
         { "verses.text": searchRegex },
+        { "songs.name": searchRegex },
       ];
     }
 
-    // Build query with sorting
     let studiesQuery = Study.find(query);
 
-    // Sorting
     const sortField = {};
-    if (sortBy === "popular") {
+    if (sortBy === "popular" || sortBy === "views") {
       sortField.views = sortOrder === "asc" ? 1 : -1;
     } else if (sortBy === "likes") {
-      sortField.likes = sortOrder === "asc" ? 1 : -1;
+      sortField.likesCount = sortOrder === "asc" ? 1 : -1;
     } else {
       sortField[sortBy] = sortOrder === "asc" ? 1 : -1;
     }
 
-    studiesQuery = studiesQuery
+    let studies = await studiesQuery
       .sort(sortField)
-      .skip(parseInt(skip))
-      .limit(parseInt(limit));
+      .skip(parseInt(skip, 10))
+      .limit(parseInt(limit, 10));
 
-    const studies = await studiesQuery;
+    // Fix likes sorting manually because likes is an array
+    if (sortBy === "likes") {
+      studies = studies.sort((a, b) => {
+        const aLikes = a.likes?.length || 0;
+        const bLikes = b.likes?.length || 0;
+        return sortOrder === "asc" ? aLikes - bLikes : bLikes - aLikes;
+      });
+    }
+
     const total = await Study.countDocuments(query);
 
     res.json({
       studies,
       total,
-      hasMore: skip + studies.length < total,
-      page: Math.floor(skip / limit) + 1,
-      totalPages: Math.ceil(total / limit),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get single study by ID with view increment
-router.get("/:id", async (req, res) => {
-  try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ message: "Study not found" });
-
-    // Increment view count
-    study.views += 1;
-    await study.save();
-
-    // Get related studies
-    const relatedStudies = await Study.find({
-      _id: { $ne: study._id },
-      $or: [{ category: study.category }, { tags: { $in: study.tags } }],
-      status: "published",
-    })
-      .limit(3)
-      .sort({ views: -1 });
-
-    res.json({
-      study,
-      relatedStudies,
-      meta: {
-        commentsCount: study.comments.length,
-        totalLikes:
-          study.likes.length +
-          study.comments.reduce((sum, c) => sum + c.likes.length, 0),
-        timeToComplete: study.timeToComplete,
-      },
+      hasMore: Number(skip) + studies.length < total,
+      page: Math.floor(Number(skip) / Number(limit)) + 1,
+      totalPages: Math.ceil(total / Number(limit)),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -148,6 +105,7 @@ router.get("/:id", async (req, res) => {
 router.get("/stats/summary", async (req, res) => {
   try {
     const totalStudies = await Study.countDocuments({ status: "published" });
+
     const totalComments = await Study.aggregate([
       { $match: { status: "published" } },
       { $project: { commentsCount: { $size: "$comments" } } },
@@ -158,6 +116,11 @@ router.get("/stats/summary", async (req, res) => {
       { $match: { status: "published" } },
       { $project: { likesCount: { $size: "$likes" } } },
       { $group: { _id: null, total: { $sum: "$likesCount" } } },
+    ]);
+
+    const totalViews = await Study.aggregate([
+      { $match: { status: "published" } },
+      { $group: { _id: null, total: { $sum: "$views" } } },
     ]);
 
     const categoryStats = await Study.aggregate([
@@ -181,6 +144,7 @@ router.get("/stats/summary", async (req, res) => {
       totalStudies,
       totalComments: totalComments[0]?.total || 0,
       totalLikes: totalLikes[0]?.total || 0,
+      totalViews: totalViews[0]?.total || 0,
       categoryStats,
       topStudies,
       featuredStudies: await Study.countDocuments({
@@ -298,273 +262,93 @@ router.get("/tags/popular", async (req, res) => {
   }
 });
 
-// Add a new study
-router.post("/", async (req, res) => {
+// Get featured studies
+router.get("/featured/studies", async (req, res) => {
   try {
-    const newStudy = new Study({
-      ...req.body,
-      status: req.body.status || "published",
-      lastUpdatedBy: req.body.postedBy || "Admin",
-    });
-    await newStudy.save();
+    const studies = await Study.find({
+      isFeatured: true,
+      status: "published",
+    })
+      .sort({ createdAt: -1 })
+      .limit(6);
 
-    res.status(201).json({
-      success: true,
-      study: newStudy,
-      message: "Study created successfully",
-    });
+    res.json(studies);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Update a study
-router.put("/:id", async (req, res) => {
+// Get trending studies
+router.get("/trending/studies", async (req, res) => {
   try {
-    const updatedStudy = await Study.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...req.body,
-        lastUpdatedAt: new Date(),
-        lastUpdatedBy: req.body.updatedBy || "Unknown",
-      },
-      { new: true, runValidators: true }
-    );
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-    if (!updatedStudy)
-      return res.status(404).json({ error: "Study not found" });
+    const studies = await Study.find({
+      createdAt: { $gte: oneWeekAgo },
+      status: "published",
+    })
+      .sort({ views: -1, createdAt: -1 })
+      .limit(5);
 
-    res.json({
-      success: true,
-      study: updatedStudy,
-      message: "Study updated successfully",
-    });
+    res.json(studies);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Like/Unlike a study
-router.post("/:id/like", async (req, res) => {
-  const { userId } = req.body;
-
-  if (!userId) return res.status(400).json({ error: "User ID required" });
-
+// Search studies
+router.get("/search/advanced", async (req, res) => {
   try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ error: "Study not found" });
+    const { q, category, difficulty, timeFilter, limit = 10 } = req.query;
 
-    const alreadyLiked = study.likes.includes(userId);
+    let query = { status: "published" };
 
-    if (alreadyLiked) {
-      study.likes = study.likes.filter((id) => id !== userId);
-    } else {
-      study.likes.push(userId);
+    if (q) {
+      const searchRegex = new RegExp(q, "i");
+      query.$or = [
+        { title: searchRegex },
+        { description: searchRegex },
+        { summary: searchRegex },
+        { tags: searchRegex },
+        { callToAction: searchRegex },
+        { "verses.reference": searchRegex },
+        { "verses.text": searchRegex },
+        { "songs.name": searchRegex },
+      ];
     }
 
-    await study.save();
-
-    res.json({
-      success: true,
-      liked: !alreadyLiked,
-      likes: study.likes,
-      totalLikes: study.likes.length,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Favorite/Unfavorite a study
-router.post("/:id/favorite", async (req, res) => {
-  const { userId } = req.body;
-
-  if (!userId) return res.status(400).json({ error: "User ID required" });
-
-  try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    const alreadyFavorited = study.favorites.includes(userId);
-
-    if (alreadyFavorited) {
-      study.favorites = study.favorites.filter((id) => id !== userId);
-    } else {
-      study.favorites.push(userId);
+    if (category && category !== "all") {
+      query.category = category;
     }
 
-    await study.save();
-
-    res.json({
-      success: true,
-      favorited: !alreadyFavorited,
-      favorites: study.favorites,
-      totalFavorites: study.favorites.length,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Share a study
-router.post("/:id/share", async (req, res) => {
-  try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    study.shareCount += 1;
-    await study.save();
-
-    res.json({
-      success: true,
-      shareCount: study.shareCount,
-      message: "Share recorded successfully",
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Add a new comment to a study
-router.post("/:id/comments", async (req, res) => {
-  const { user, text } = req.body;
-
-  if (!user || !text)
-    return res.status(400).json({ error: "Missing required fields" });
-
-  try {
-    const study = await Study.findById(req.params.id);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    study.comments.push({
-      user,
-      text,
-      likes: [],
-    });
-
-    await study.save();
-
-    const newComment = study.comments[study.comments.length - 1];
-
-    res.status(201).json({
-      success: true,
-      comment: newComment,
-      totalComments: study.comments.length,
-      message: "Comment added successfully",
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Like/Unlike a comment
-router.post("/:studyId/comments/:commentId/like", async (req, res) => {
-  const { userId } = req.body;
-
-  if (!userId) return res.status(400).json({ error: "User ID required" });
-
-  try {
-    const study = await Study.findById(req.params.studyId);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    const comment = study.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: "Comment not found" });
-
-    const alreadyLiked = comment.likes.includes(userId);
-
-    if (alreadyLiked) {
-      comment.likes = comment.likes.filter((id) => id !== userId);
-    } else {
-      comment.likes.push(userId);
+    if (difficulty && difficulty !== "all") {
+      query.difficulty = difficulty;
     }
 
-    await study.save();
+    if (timeFilter === "week") {
+      query.createdAt = {
+        $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      };
+    } else if (timeFilter === "month") {
+      query.createdAt = {
+        $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      };
+    } else if (timeFilter === "year") {
+      query.createdAt = {
+        $gte: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      };
+    }
+
+    const studies = await Study.find(query)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit, 10));
+
+    const suggestions = await Study.distinct("tags", query);
 
     res.json({
-      success: true,
-      liked: !alreadyLiked,
-      likes: comment.likes,
-      totalLikes: comment.likes.length,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update a comment
-router.put("/:studyId/comments/:commentId", async (req, res) => {
-  const { text } = req.body;
-
-  if (!text) return res.status(400).json({ error: "Text is required" });
-
-  try {
-    const study = await Study.findById(req.params.studyId);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    const comment = study.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: "Comment not found" });
-
-    comment.text = text;
-    comment.updatedAt = new Date();
-
-    await study.save();
-
-    res.json({
-      success: true,
-      comment: comment,
-      message: "Comment updated successfully",
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Delete a comment
-router.delete("/:studyId/comments/:commentId", async (req, res) => {
-  try {
-    const study = await Study.findById(req.params.studyId);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    const comment = study.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: "Comment not found" });
-
-    comment.remove();
-    await study.save();
-
-    res.json({
-      success: true,
-      message: "Comment deleted successfully",
-      totalComments: study.comments.length,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Add a reply to a comment
-router.post("/:studyId/comments/:commentId/replies", async (req, res) => {
-  const { user, text } = req.body;
-
-  if (!user || !text)
-    return res.status(400).json({ error: "Missing required fields" });
-
-  try {
-    const study = await Study.findById(req.params.studyId);
-    if (!study) return res.status(404).json({ error: "Study not found" });
-
-    const comment = study.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: "Comment not found" });
-
-    comment.replies.push({ user, text });
-    await study.save();
-
-    const newReply = comment.replies[comment.replies.length - 1];
-
-    res.status(201).json({
-      success: true,
-      reply: newReply,
-      totalReplies: comment.replies.length,
-      message: "Reply added successfully",
+      results: studies,
+      suggestions: suggestions.slice(0, 10),
+      total: studies.length,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -618,88 +402,359 @@ router.get("/user/:userId", async (req, res) => {
   }
 });
 
-// Get featured studies
-router.get("/featured/studies", async (req, res) => {
+// Get single study by ID with view increment
+router.get("/:id", async (req, res) => {
   try {
-    const studies = await Study.find({
-      isFeatured: true,
+    const study = await Study.findById(req.params.id);
+
+    if (!study) {
+      return res.status(404).json({ message: "Study not found" });
+    }
+
+    study.views += 1;
+    await study.save();
+
+    const relatedStudies = await Study.find({
+      _id: { $ne: study._id },
+      $or: [{ category: study.category }, { tags: { $in: study.tags || [] } }],
       status: "published",
     })
-      .sort({ createdAt: -1 })
-      .limit(6);
-
-    res.json(studies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get trending studies
-router.get("/trending/studies", async (req, res) => {
-  try {
-    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-    const studies = await Study.find({
-      createdAt: { $gte: oneWeekAgo },
-      status: "published",
-    })
-      .sort({ views: -1, likes: -1 })
-      .limit(5);
-
-    res.json(studies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Search studies
-router.get("/search/advanced", async (req, res) => {
-  try {
-    const { q, category, difficulty, timeFilter, limit = 10 } = req.query;
-
-    let query = { status: "published" };
-
-    if (q) {
-      const searchRegex = new RegExp(q, "i");
-      query.$or = [
-        { title: searchRegex },
-        { description: searchRegex },
-        { tags: searchRegex },
-        { callToAction: searchRegex },
-        { "verses.reference": searchRegex },
-        { "verses.text": searchRegex },
-        { "songs.name": searchRegex },
-      ];
-    }
-
-    if (category && category !== "all") {
-      query.category = category;
-    }
-
-    if (difficulty && difficulty !== "all") {
-      query.difficulty = difficulty;
-    }
-
-    if (timeFilter === "week") {
-      query.createdAt = {
-        $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-      };
-    } else if (timeFilter === "month") {
-      query.createdAt = {
-        $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-      };
-    }
-
-    const studies = await Study.find(query)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-
-    const suggestions = await Study.distinct("tags", query).limit(10);
+      .limit(3)
+      .sort({ views: -1 });
 
     res.json({
-      results: studies,
-      suggestions,
-      total: studies.length,
+      study,
+      relatedStudies,
+      meta: {
+        commentsCount: study.comments.length,
+        totalLikes:
+          study.likes.length +
+          study.comments.reduce((sum, c) => sum + c.likes.length, 0),
+        timeToComplete: study.timeToComplete,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a new study
+router.post("/", async (req, res) => {
+  try {
+    const newStudy = new Study({
+      ...req.body,
+      imageUrl: req.body.imageUrl || "/images/bible-study-default.jpg",
+      status: req.body.status || "published",
+      lastUpdatedBy: req.body.postedBy || "Admin",
+    });
+
+    await newStudy.save();
+
+    res.status(201).json({
+      success: true,
+      study: newStudy,
+      message: "Study created successfully",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Update a study
+router.put("/:id", async (req, res) => {
+  try {
+    const updatedStudy = await Study.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...req.body,
+        imageUrl: req.body.imageUrl || "/images/bible-study-default.jpg",
+        lastUpdatedAt: new Date(),
+        lastUpdatedBy: req.body.updatedBy || "Unknown",
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedStudy) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    res.json({
+      success: true,
+      study: updatedStudy,
+      message: "Study updated successfully",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Like/Unlike a study
+router.post("/:id/like", async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: "User ID required" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.id);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const alreadyLiked = study.likes.includes(userId);
+
+    if (alreadyLiked) {
+      study.likes = study.likes.filter((id) => id !== userId);
+    } else {
+      study.likes.push(userId);
+    }
+
+    await study.save();
+
+    res.json({
+      success: true,
+      liked: !alreadyLiked,
+      likes: study.likes,
+      totalLikes: study.likes.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Favorite/Unfavorite a study
+router.post("/:id/favorite", async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: "User ID required" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.id);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const alreadyFavorited = study.favorites.includes(userId);
+
+    if (alreadyFavorited) {
+      study.favorites = study.favorites.filter((id) => id !== userId);
+    } else {
+      study.favorites.push(userId);
+    }
+
+    await study.save();
+
+    res.json({
+      success: true,
+      favorited: !alreadyFavorited,
+      favorites: study.favorites,
+      totalFavorites: study.favorites.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Share a study
+router.post("/:id/share", async (req, res) => {
+  try {
+    const study = await Study.findById(req.params.id);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    study.shareCount += 1;
+    await study.save();
+
+    res.json({
+      success: true,
+      shareCount: study.shareCount,
+      message: "Share recorded successfully",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a new comment
+router.post("/:id/comments", async (req, res) => {
+  const { user, text } = req.body;
+
+  if (!user || !text) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.id);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    study.comments.push({
+      user,
+      text,
+      likes: [],
+    });
+
+    await study.save();
+
+    const newComment = study.comments[study.comments.length - 1];
+
+    res.status(201).json({
+      success: true,
+      comment: newComment,
+      totalComments: study.comments.length,
+      message: "Comment added successfully",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Like/Unlike a comment
+router.post("/:studyId/comments/:commentId/like", async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: "User ID required" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.studyId);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const comment = study.comments.id(req.params.commentId);
+
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    const alreadyLiked = comment.likes.includes(userId);
+
+    if (alreadyLiked) {
+      comment.likes = comment.likes.filter((id) => id !== userId);
+    } else {
+      comment.likes.push(userId);
+    }
+
+    await study.save();
+
+    res.json({
+      success: true,
+      liked: !alreadyLiked,
+      likes: comment.likes,
+      totalLikes: comment.likes.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a comment
+router.put("/:studyId/comments/:commentId", async (req, res) => {
+  const { text } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: "Text is required" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.studyId);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const comment = study.comments.id(req.params.commentId);
+
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    comment.text = text;
+    comment.updatedAt = new Date();
+
+    await study.save();
+
+    res.json({
+      success: true,
+      comment,
+      message: "Comment updated successfully",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a comment
+router.delete("/:studyId/comments/:commentId", async (req, res) => {
+  try {
+    const study = await Study.findById(req.params.studyId);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const comment = study.comments.id(req.params.commentId);
+
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    comment.deleteOne();
+    await study.save();
+
+    res.json({
+      success: true,
+      message: "Comment deleted successfully",
+      totalComments: study.comments.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a reply to a comment
+router.post("/:studyId/comments/:commentId/replies", async (req, res) => {
+  const { user, text } = req.body;
+
+  if (!user || !text) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    const study = await Study.findById(req.params.studyId);
+
+    if (!study) {
+      return res.status(404).json({ error: "Study not found" });
+    }
+
+    const comment = study.comments.id(req.params.commentId);
+
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    comment.replies.push({ user, text });
+    await study.save();
+
+    const newReply = comment.replies[comment.replies.length - 1];
+
+    res.status(201).json({
+      success: true,
+      reply: newReply,
+      totalReplies: comment.replies.length,
+      message: "Reply added successfully",
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

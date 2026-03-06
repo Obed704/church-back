@@ -2,29 +2,29 @@ import mongoose from "mongoose";
 
 const ReplySchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    text: { type: String, required: true },
+    name: { type: String, required: true, trim: true },
+    text: { type: String, required: true, trim: true },
   },
   { timestamps: true }
 );
 
 const CommentSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    email: { type: String, default: "" }, // ✅ optional
-    text: { type: String, required: true },
-    replies: [ReplySchema],
+    name: { type: String, required: true, trim: true },
+    email: { type: String, default: "", trim: true },
+    text: { type: String, required: true, trim: true },
+    replies: { type: [ReplySchema], default: [] },
   },
   { timestamps: true }
 );
 
 const JoinRequestSchema = new mongoose.Schema(
   {
-    userId: { type: String, default: "" },
-    name: { type: String, required: true },
-    email: { type: String, default: "" },
-    phone: { type: String, default: "" },
-    message: { type: String, default: "" },
+    userId: { type: String, default: "", trim: true },
+    name: { type: String, required: true, trim: true },
+    email: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    message: { type: String, default: "", trim: true },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],
@@ -34,29 +34,76 @@ const JoinRequestSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const SocialLinksSchema = new mongoose.Schema(
+  {
+    instagram: { type: String, default: "", trim: true },
+    facebook: { type: String, default: "", trim: true },
+    linkedin: { type: String, default: "", trim: true },
+    x: { type: String, default: "", trim: true },
+    whatsapp: { type: String, default: "", trim: true },
+  },
+  { _id: false }
+);
+
+const MemberSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    role: { type: String, default: "", trim: true },
+    imageUrl: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    email: { type: String, default: "", trim: true },
+    bio: { type: String, default: "", trim: true },
+    socials: { type: SocialLinksSchema, default: () => ({}) },
+  },
+  { _id: true }
+);
+
+const CommitteeSchema = new mongoose.Schema(
+  {
+    role: { type: String, required: true, trim: true },
+    name: { type: String, required: true, trim: true },
+    imageUrl: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    email: { type: String, default: "", trim: true },
+  },
+  { _id: true }
+);
+
+const DepartmentImageSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: ["hero", "gallery", "event", "choir", "worship", "service", "mission", "team", "other"],
+      default: "gallery",
+    },
+    title: { type: String, default: "", trim: true },
+    imageUrl: { type: String, required: true, trim: true },
+    description: { type: String, default: "", trim: true },
+  },
+  { _id: true }
+);
+
 const DepartmentSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    president: { type: String, required: true },
-    est: { type: String },
-    description: { type: String },
-    phone: { type: String, default: "" }, // optional if you want
-    email: { type: String, default: "" }, // optional if you want
+    name: { type: String, required: true, trim: true },
+    president: { type: String, required: true, trim: true },
+    est: { type: String, default: "", trim: true },
+    description: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    email: { type: String, default: "", trim: true },
 
-    members: [{ type: String }],
+    heroImage: { type: String, default: "", trim: true },
 
-    committee: [
-      {
-        role: { type: String, required: true },
-        name: { type: String, required: true },
-      },
-    ],
+    gallery: { type: [DepartmentImageSchema], default: [] },
 
-    plans: [{ type: String }],
-    actions: [{ type: String }],
-    comments: [CommentSchema],
+    members: { type: [MemberSchema], default: [] },
 
-    // ✅ store join applications (not returned by default)
+    committee: { type: [CommitteeSchema], default: [] },
+
+    plans: { type: [String], default: [] },
+    actions: { type: [String], default: [] },
+    comments: { type: [CommentSchema], default: [] },
+
     joinRequests: { type: [JoinRequestSchema], default: [], select: false },
   },
   { timestamps: true }

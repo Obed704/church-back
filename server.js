@@ -25,7 +25,7 @@ import videoRoutes from "./src/routes/videoRoute.js";
 import LargeVideo from "./src/routes/LargeVideo.js";
 import holidayRoutes from "./src/routes/HolidayRoutes.js";
 import PreachRoutes from "./src/routes/dailyPreachingRoutes.js";
-import commingeventsRoutes from "./src/routes/eventEvent.js";
+// import commingeventsRoutes from "./src/routes/eventEvent.js";
 import AdminVideo from "./src/routes/adminVideos.js";
 import committeeRoutes from "./src/routes/committeeRoutes.js";
 
@@ -110,7 +110,7 @@ app.use("/api/admin/videos", AdminVideo);
 app.use("/api/LargeVideo", LargeVideo);
 app.use("/api/holiday", holidayRoutes);
 app.use("/api/dailyPreachingsWord", PreachRoutes);
-app.use("/api/commingevents", commingeventsRoutes);
+// app.use("/api/commingevents", commingeventsRoutes);
 
 // ✅ NEW: Users directory + Chat APIs
 app.use("/api/users", usersRoutes);
