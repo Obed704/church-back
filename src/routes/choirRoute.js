@@ -1,6 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
-import Choir from "../models/Choir.js";
+import Choir from "../models/choir.js";
 import ChoirApplication from "../models/choirApplication.js";
 
 const router = express.Router();
@@ -129,15 +129,23 @@ router.put("/:id", async (req, res) => {
     choir.foundedYear = body.foundedYear ?? choir.foundedYear;
     choir.president = body.president ?? choir.president;
     choir.vicePresident = body.vicePresident ?? choir.vicePresident;
-    choir.committee = Array.isArray(body.committee) ? body.committee : choir.committee;
+    choir.committee = Array.isArray(body.committee)
+      ? body.committee
+      : choir.committee;
     choir.members = Array.isArray(body.members) ? body.members : choir.members;
     choir.songs = Array.isArray(body.songs) ? body.songs : choir.songs;
     choir.socials = body.socials ?? choir.socials;
-    choir.rehearsals = Array.isArray(body.rehearsals) ? body.rehearsals : choir.rehearsals;
-    choir.achievements = Array.isArray(body.achievements) ? body.achievements : choir.achievements;
+    choir.rehearsals = Array.isArray(body.rehearsals)
+      ? body.rehearsals
+      : choir.rehearsals;
+    choir.achievements = Array.isArray(body.achievements)
+      ? body.achievements
+      : choir.achievements;
     choir.gallery = Array.isArray(body.gallery) ? body.gallery : choir.gallery;
     choir.faqs = Array.isArray(body.faqs) ? body.faqs : choir.faqs;
-    choir.previousYears = Array.isArray(body.previousYears) ? body.previousYears : choir.previousYears;
+    choir.previousYears = Array.isArray(body.previousYears)
+      ? body.previousYears
+      : choir.previousYears;
     choir.acceptsApplications =
       typeof body.acceptsApplications === "boolean"
         ? body.acceptsApplications
@@ -170,18 +178,24 @@ router.post("/:id/apply", async (req, res) => {
       return res.status(400).json({ error: "Full name is required." });
     }
 
-    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanEmail = String(email || "")
+      .trim()
+      .toLowerCase();
     const cleanPhone = String(phone || "").trim();
 
     if (!cleanEmail && !cleanPhone) {
-      return res.status(400).json({ error: "Provide at least email or phone." });
+      return res
+        .status(400)
+        .json({ error: "Provide at least email or phone." });
     }
 
     const choir = await Choir.findById(id);
     if (!choir) return res.status(404).json({ error: "Choir not found." });
 
     if (!choir.acceptsApplications) {
-      return res.status(400).json({ error: "This choir is not accepting applications now." });
+      return res
+        .status(400)
+        .json({ error: "This choir is not accepting applications now." });
     }
 
     const application = await ChoirApplication.create({
@@ -229,7 +243,10 @@ router.get("/:id/applications", async (req, res) => {
     if (status !== "all") filter.status = status;
 
     const [items, total] = await Promise.all([
-      ChoirApplication.find(filter).sort({ createdAt: -1 }).skip(skip).limit(lim),
+      ChoirApplication.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(lim),
       ChoirApplication.countDocuments(filter),
     ]);
 
